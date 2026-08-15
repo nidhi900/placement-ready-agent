@@ -661,14 +661,14 @@ def extract_resume_text(file_bytes: bytes) -> str:
 app = FastAPI(title="Placement-Ready AI Career Agent", version="1.0.0")
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 def root():
-    return JSONResponse({"status": "ok", "service": "placement-ready-ai-career-agent"})
-
-
-@app.get("/ui", response_class=HTMLResponse)
-def ui():
     return HTMLResponse(content=UI_HTML)
+
+
+@app.get("/health")
+def health():
+    return JSONResponse({"status": "ok", "service": "placement-ready-ai-career-agent"})
 
 
 @app.post("/analyze")
@@ -757,20 +757,20 @@ UI_HTML = """
 </head>
 <body>
 <div class="wrap">
-  <h1>PLACEMENT-READY AI AGENT</h1>
+  <h1>PLACEMENT-READY AI CAREER AGENT</h1>
   <p class="sub">Upload your resume, tell it your target role, and get a structured readiness report.</p>
 
   <div class="card">
-    <label>Upload Resume (PDF)</label>
+    <label>1. Resume PDF</label>
     <input type="file" id="resume" accept="application/pdf" />
 
-    <label>Target Job Role</label>
-    <input type="text" id="target_role" placeholder="e.g. Machine Learning Engineer" />
+    <label>2. Target Job Role</label>
+    <input type="text" id="target_role" placeholder="Machine Learning Engineer" />
 
-    <label>GitHub Username (optional)</label>
-    <input type="text" id="github_username" placeholder="e.g. yourhandle" />
+    <label>3. GitHub Username (optional)</label>
+    <input type="text" id="github_username" placeholder="username" />
 
-    <button id="analyzeBtn" onclick="analyze()">ANALYZE</button>
+    <button id="analyzeBtn" onclick="analyze()">4. ANALYZE RESUME</button>
     <div id="error"></div>
   </div>
 
@@ -829,31 +829,32 @@ function renderReport(r) {
   const el = document.getElementById('result');
   let html = '';
 
+  html += `<h2 style="margin-top:32px;">PLACEMENT READINESS REPORT</h2>`;
+
   html += `<div class="card">
-    <div class="muted">TARGET ROLE</div>
+    <div class="muted">Target Role:</div>
     <div style="font-size:18px;font-weight:700;">${r.target_role}</div>
-    <div class="muted" style="margin-top:16px;">ESTIMATED PLACEMENT READINESS</div>
+    <div class="muted" style="margin-top:16px;">Estimated Placement Readiness:</div>
     <div class="score">${r.estimated_placement_readiness} / 100</div>
   </div>`;
 
   html += `<div class="card">
-    <div class="section-title">MATCHED SKILLS</div>
+    <div class="section-title">Matched Skills:</div>
     ${(r.matched_skills || []).map(s => tag('✓ ' + s, 'matched')).join(' ') || '<span class="muted">None</span>'}
-    <div class="section-title">PARTIAL SKILLS</div>
+    <div class="section-title">Partial Skills:</div>
     ${(r.partial_skills || []).map(s => tag('◐ ' + s, 'partial')).join(' ') || '<span class="muted">None</span>'}
-    <div class="section-title">MISSING SKILLS</div>
+    <div class="section-title">Missing Skills:</div>
     ${(r.missing_skills || []).map(s => tag('✗ ' + s, 'missing')).join(' ') || '<span class="muted">None</span>'}
   </div>`;
 
   const pr = r.priority_skills || {};
+  const orderedPriority = [...(pr.HIGH || []), ...(pr.MEDIUM || []), ...(pr.LOW || [])];
   html += `<div class="card">
-    <div class="section-title">PRIORITY SKILLS</div>
-    <div class="muted">HIGH</div> ${(pr.HIGH || []).join(', ') || '—'}
-    <div class="muted" style="margin-top:8px;">MEDIUM</div> ${(pr.MEDIUM || []).join(', ') || '—'}
-    <div class="muted" style="margin-top:8px;">LOW</div> ${(pr.LOW || []).join(', ') || '—'}
+    <div class="section-title">Priority Skills:</div>
+    <ol>${orderedPriority.map(s => `<li>${s}</li>`).join('') || '<li class="muted">None</li>'}</ol>
   </div>`;
 
-  html += `<div class="card"><div class="section-title">RECOMMENDED PROJECTS</div>`;
+  html += `<div class="card"><div class="section-title">Recommended Projects:</div>`;
   (r.recommended_projects || []).forEach((p, i) => {
     html += `<div class="project">
       <div style="font-weight:700;">${i+1}. ${p.title || ''}</div>
@@ -867,7 +868,7 @@ function renderReport(r) {
 
   if (r.github_analysis) {
     const g = r.github_analysis;
-    html += `<div class="card"><div class="section-title">GITHUB ANALYSIS</div>`;
+    html += `<div class="card"><div class="section-title">GitHub Analysis:</div>`;
     if (g.error) {
       html += `<div class="muted">${g.error}</div>`;
     } else {
@@ -877,14 +878,14 @@ function renderReport(r) {
     html += `</div>`;
   }
 
-  html += `<div class="card"><div class="section-title">PREPARATION ROADMAP</div>`;
+  html += `<div class="card"><div class="section-title">Preparation Roadmap:</div>`;
   const roadmap = r.roadmap || {};
   Object.keys(roadmap).forEach(week => {
     html += `<div><strong>${week}:</strong> ${roadmap[week]}</div>`;
   });
   html += `</div>`;
 
-  html += `<div class="card"><div class="section-title">NEXT STEPS</div>
+  html += `<div class="card"><div class="section-title">Next Steps:</div>
     <ol>${(r.next_steps || []).map(s => `<li>${s}</li>`).join('')}</ol>
   </div>`;
 
