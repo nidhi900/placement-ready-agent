@@ -63,11 +63,89 @@ def get_llm(temperature: float = 0.2) -> ChatGoogleGenerativeAI:
     )
 
 
+class LLMResponseParsingError(Exception):
+    """
+    Raised when Gemini's response text cannot be parsed as JSON after all
+    recovery attempts. Carries a short, user-safe message — the raw model
+    output is logged server-side (stderr) only, never sent to the client.
+    """
+
+
+def _extract_text_from_response(response) -> str:
+    """
+    ChatGoogleGenerativeAI (langchain-google-genai) can return response.content
+    as either:
+      - a plain string, or
+      - a list of content blocks, e.g. [{"type": "text", "text": "..."}]
+    Naively doing str(response.content) on the list form stringifies the
+    Python list/dict repr itself rather than pulling out the real text,
+    which is what was breaking JSON parsing. This extracts the actual text
+    in both cases.
+    """
+    content = response.content
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                # Standard shape: {"type": "text", "text": "..."}
+                if "text" in block:
+                    parts.append(block["text"])
+        return "\n".join(parts)
+
+    # Fallback for any other shape.
+    return str(content)
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """
+    Robustly pull a JSON object out of raw LLM text that may:
+      - be plain JSON already
+      - be wrapped in ```json ... ``` or ``` ... ``` fences
+      - have extra commentary before/after the JSON block
+    """
+    stripped = text.strip()
+
+    # 1) Try parsing as-is first (the ideal case).
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Look for a fenced code block (```json ... ``` or ``` ... ```)
+    #    anywhere in the text, not just at the very start/end.
+    fence_match = re.search(r"```(?:json)?\s*(.*?)```", stripped, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # 3) Fall back to grabbing the first "{" through the last "}" in the text,
+    #    in case there's stray commentary with no fences at all.
+    brace_match = re.search(r"\{.*\}", stripped, re.DOTALL)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise LLMResponseParsingError(
+        "The AI model returned a response that could not be parsed as JSON."
+    )
+
+
 def call_llm_json(system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict:
     """
-    Call Gemini and parse a strict-JSON response. Strips markdown code
-    fences defensively, since models sometimes wrap JSON in ```json ...```
-    even when told not to.
+    Call Gemini and parse a strict-JSON response, handling both the
+    plain-string and content-block response shapes, and stripping markdown
+    code fences the model may add despite being told not to.
     """
     llm = get_llm(temperature=temperature)
     messages = [
@@ -75,19 +153,16 @@ def call_llm_json(system_prompt: str, user_prompt: str, temperature: float = 0.2
         HumanMessage(content=user_prompt),
     ]
     response = llm.invoke(messages)
-    text = response.content if isinstance(response.content, str) else str(response.content)
-    cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    text = _extract_text_from_response(response)
+
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Best-effort recovery: grab the first {...} block in the text.
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
-        raise ValueError(f"Model did not return valid JSON. Raw output:\n{text[:800]}")
+        return _extract_json_from_text(text)
+    except LLMResponseParsingError:
+        # Log full raw output server-side for debugging; never expose it
+        # to the client (requirement: no raw dump on the webpage).
+        print(f"[call_llm_json] Failed to parse model output as JSON. Raw text:\n{text[:2000]}")
+        raise
+
 
 
 # --------------------------------------------------------------------------
@@ -710,6 +785,17 @@ async def analyze(
     except RuntimeError as exc:
         # e.g. missing GOOGLE_API_KEY
         return JSONResponse(status_code=500, content={"error": str(exc)})
+    except LLMResponseParsingError:
+        # Full raw model output was already logged server-side in call_llm_json.
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": (
+                    "The AI model returned an unexpected response and the analysis "
+                    "could not be completed. Please try again."
+                )
+            },
+        )
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": f"Analysis failed: {exc}"})
 
