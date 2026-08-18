@@ -720,7 +720,7 @@ UI_HTML = """
     <label>3. GitHub Username (optional)</label>
     <input type="text" id="github_username" placeholder="username" />
 
-    <button id="analyzeBtn" onclick="analyze()">4. ANALYZE RESUME</button>
+    <button id="analyzeBtn" onclick="analyze()">ANALYZE RESUME</button>
     <div id="error"></div>
   </div>
 
